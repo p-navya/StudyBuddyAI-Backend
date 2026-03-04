@@ -19,11 +19,42 @@ const ollama = new Ollama({ host: ollamaHost });
  */
 export const extractTextFromPDF = async (buffer) => {
   try {
-    const data = await pdfParse(buffer);
-    return data.text;
+    if (!buffer || buffer.length === 0) {
+      throw new Error('PDF buffer is empty');
+    }
+    
+    // Check PDF magic bytes
+    const pdfHeader = buffer.slice(0, 4).toString();
+    if (pdfHeader !== '%PDF') {
+      console.warn('Warning: File may not be a valid PDF. Header:', pdfHeader);
+    }
+    
+    const options = {
+      max: 0, // Parse all pages
+      version: 'v1.10.100' // Use specific pdf-parse version
+    };
+    
+    const data = await pdfParse(buffer, options);
+    
+    if (!data || !data.text) {
+      throw new Error('PDF parsed but no text content found');
+    }
+    
+    const extractedText = data.text.trim();
+    
+    if (extractedText.length === 0) {
+      throw new Error('PDF appears to be empty or contains only images. Please use a PDF with selectable text.');
+    }
+    
+    console.log(`Successfully extracted ${extractedText.length} characters from PDF (${data.numpages} pages)`);
+    
+    return extractedText;
   } catch (error) {
     console.error('PDF Parse Error:', error);
-    throw new Error('Failed to parse PDF file');
+    if (error.message) {
+      throw error;
+    }
+    throw new Error(`Failed to parse PDF file: ${error.message || 'Unknown error'}`);
   }
 };
 
@@ -35,16 +66,91 @@ export const extractTextFromPDF = async (buffer) => {
  * @param {string} contextData - Optional context text (e.g. parsed PDF content)
  */
 export const getChatbotResponse = async (message, conversationHistory = [], mode = 'mental-support', contextData = '') => {
-  // Try Ollama
+  // Try Groq API first if available (recommended for production)
+  if (process.env.GROQ_API_KEY) {
+    try {
+      return await getGroqResponse(message, conversationHistory, mode, contextData);
+    } catch (error) {
+      console.error('Groq API failed:', error.message);
+      // Fall through to Ollama
+    }
+  }
+
+  // Try Ollama as fallback or primary option
   try {
     return await getOllamaResponse(message, conversationHistory, mode, contextData);
   } catch (error) {
     console.error('Ollama connection failed:', error.message);
+    
+    // Provide helpful error message based on what's configured
+    let errorMessage = 'AI service is not available. ';
+    if (process.env.GROQ_API_KEY) {
+      errorMessage += 'Both Groq API and Ollama failed. Please check your configuration.';
+    } else {
+      errorMessage += 'Please either:\n1. Install and run Ollama locally (https://ollama.com), or\n2. Set GROQ_API_KEY in your .env file for cloud-based AI (free at https://console.groq.com/)';
+    }
+    
     return {
       success: false,
-      message: 'Local AI (Ollama) is not reachable. Please make sure the Ollama app is running on your computer.',
+      message: errorMessage,
       error: error.message
     };
+  }
+};
+
+/**
+ * Get response from Groq API (cloud-based, no local setup needed)
+ */
+const getGroqResponse = async (message, conversationHistory, mode, contextData) => {
+  const systemPrompt = await getSystemPrompt(mode, contextData, message);
+
+  // Format messages for Groq
+  const messages = [
+    { role: 'system', content: systemPrompt },
+    ...conversationHistory,
+    { role: 'user', content: message }
+  ];
+
+  try {
+    const groqApiKey = process.env.GROQ_API_KEY;
+    const modelName = process.env.GROQ_MODEL || 'llama-3.1-8b-instant';
+    
+    console.log(`Using Groq Model: ${modelName}`);
+
+    const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${groqApiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: modelName,
+        messages: messages,
+        temperature: 0.7,
+        max_tokens: 2048,
+      }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(`Groq API error: ${response.status} - ${errorData.error?.message || response.statusText}`);
+    }
+
+    const data = await response.json();
+    
+    return {
+      success: true,
+      message: data.choices[0]?.message?.content || 'No response from AI',
+      model: data.model || modelName,
+      usage: {
+        prompt_tokens: data.usage?.prompt_tokens,
+        completion_tokens: data.usage?.completion_tokens,
+        total_tokens: data.usage?.total_tokens,
+      }
+    };
+  } catch (error) {
+    console.error(`Groq API Error:`, error);
+    throw new Error(`Groq API error: ${error.message}`);
   }
 };
 

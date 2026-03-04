@@ -13,11 +13,43 @@ export const chat = async (req, res) => {
 
     // Handle file upload if present
     if (req.file) {
-      if (req.file.mimetype === 'application/pdf') {
-        contextData = await extractTextFromPDF(req.file.buffer);
+      // Check if it's a PDF file (support multiple MIME types)
+      const isPDF = req.file.mimetype === 'application/pdf' || 
+                   req.file.mimetype === 'application/x-pdf' ||
+                   req.file.originalname.toLowerCase().endsWith('.pdf') ||
+                   req.file.buffer[0] === 0x25 && req.file.buffer[1] === 0x50 && req.file.buffer[2] === 0x44 && req.file.buffer[3] === 0x46; // PDF magic bytes: %PDF
+      
+      if (isPDF) {
+        try {
+          console.log('Processing PDF file:', {
+            filename: req.file.originalname,
+            size: req.file.size,
+            mimetype: req.file.mimetype
+          });
+          
+          contextData = await extractTextFromPDF(req.file.buffer);
+          
+          if (!contextData || contextData.trim().length === 0) {
+            console.warn('PDF parsed but extracted text is empty');
+            return res.status(400).json({ 
+              success: false, 
+              message: 'PDF file appears to be empty or could not be read. Please ensure the PDF contains text (not just images).' 
+            });
+          }
+          
+          console.log('PDF text extracted successfully, length:', contextData.length);
+        } catch (pdfError) {
+          console.error('PDF parsing error:', pdfError);
+          return res.status(400).json({ 
+            success: false, 
+            message: `Failed to read PDF file: ${pdfError.message}. Please ensure the file is a valid PDF.` 
+          });
+        }
       } else {
-        // Simple text decoding for other types if needed, or error
-        return res.status(400).json({ success: false, message: 'Only PDF files are currently supported' });
+        return res.status(400).json({ 
+          success: false, 
+          message: 'Only PDF files are currently supported. Please upload a .pdf file.' 
+        });
       }
     }
 
