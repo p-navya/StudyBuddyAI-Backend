@@ -9,22 +9,26 @@ import crypto from 'crypto';
 // @access  Public
 export const register = async (req, res, next) => {
   try {
-    const { name, email, password } = req.body;
+    const { name, email, password } = req.body || {};
 
     // Validation
     if (!name || !email || !password) {
       return res.status(400).json({
         success: false,
-        message: 'Please provide all required fields'
+        message: 'Please provide all required fields (name, email, password)'
       });
     }
 
-    // Check if user already exists
-    const { data: existingUser } = await supabase
+    // Check if user already exists (maybeSingle: 0 rows = no error, avoids PGRST116 noise)
+    const { data: existingUser, error: lookupError } = await supabase
       .from('users')
       .select('email')
-      .eq('email', email)
-      .single();
+      .eq('email', email.trim().toLowerCase())
+      .maybeSingle();
+
+    if (lookupError && lookupError.code !== 'PGRST116') {
+      console.error('Register lookup error:', lookupError);
+    }
 
     if (existingUser) {
       return res.status(400).json({
@@ -38,12 +42,14 @@ export const register = async (req, res, next) => {
     const hashedPassword = await bcrypt.hash(password, salt);
 
     // Create user in Supabase
+    const normalizedEmail = email.trim().toLowerCase();
+
     const { data: user, error } = await supabase
       .from('users')
       .insert([
         {
-          name,
-          email,
+          name: name.trim(),
+          email: normalizedEmail,
           password: hashedPassword,
           role: 'student'
         }
@@ -52,16 +58,26 @@ export const register = async (req, res, next) => {
       .single();
 
     if (error) {
+      console.error('Register insert error:', error.code, error.message);
+      let message = error.message;
+      if (error.code === '23505' || /duplicate|unique/i.test(message)) {
+        message = 'User already exists with this email';
+      } else if (error.code === '42501' || /row-level security|RLS/i.test(message)) {
+        message =
+          'Registration failed: database permissions. Check Supabase RLS policies allow INSERT on users for the service role.';
+      }
       return res.status(400).json({
         success: false,
-        message: error.message
+        message
       });
     }
 
     // Send welcome email
     if (user) {
-      console.log(`📧 Sending welcome email to student: ${email}`);
-      sendWelcomeEmail(email, name).catch(err => console.error('Failed to send welcome email:', err));
+      console.log(`📧 Sending welcome email to student: ${normalizedEmail}`);
+      sendWelcomeEmail(normalizedEmail, name.trim()).catch((err) =>
+        console.error('Failed to send welcome email:', err)
+      );
     }
 
     // Generate JWT token
@@ -100,7 +116,7 @@ export const register = async (req, res, next) => {
 // @access  Public
 export const login = async (req, res, next) => {
   try {
-    const { email, password } = req.body;
+    const { email, password } = req.body || {};
 
     // Validation
     if (!email || !password) {
@@ -110,11 +126,13 @@ export const login = async (req, res, next) => {
       });
     }
 
+    const normalizedEmail = email.trim().toLowerCase();
+
     // Find user by email
     const { data: user, error } = await supabase
       .from('users')
       .select('*')
-      .eq('email', email)
+      .eq('email', normalizedEmail)
       .single();
 
     if (error || !user) {

@@ -24,11 +24,21 @@ app.use(cors({
     // Allow requests with no origin (like mobile apps or curl requests)
     if (!origin) return callback(null, true);
 
+    const envOrigins = (process.env.ALLOWED_ORIGINS || '')
+      .split(',')
+      .map((o) => o.trim().replace(/\/$/, ''))
+      .filter(Boolean);
+
     const allowedOrigins = [
       'http://localhost:5173',
       'https://studybuddy-project.vercel.app',
-      process.env.FRONTEND_URL
-    ].filter(Boolean);
+      'https://grahmind.com',
+      'https://www.grahmind.com',
+      process.env.FRONTEND_URL,
+      ...envOrigins
+    ]
+      .filter(Boolean)
+      .map((o) => o.replace(/\/$/, ''));
 
     // Normalize origin by removing trailing slash
     const normalizedOrigin = origin.replace(/\/$/, '');
