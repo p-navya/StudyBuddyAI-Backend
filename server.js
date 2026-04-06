@@ -49,7 +49,11 @@ app.use(cors({
       return normalizedOrigin === normalizedAllowed;
     });
 
-    if (isAllowed) {
+    // Vercel production + preview deploys (*.vercel.app)
+    const isVercelStudyBuddy =
+      /^https:\/\/[a-z0-9-]+\.vercel\.app$/i.test(normalizedOrigin);
+
+    if (isAllowed || isVercelStudyBuddy) {
       // Return the normalized origin (without trailing slash) in the response
       callback(null, normalizedOrigin);
     } else {
@@ -121,6 +125,18 @@ app.use((req, res) => {
 
 const PORT = process.env.PORT || 5000;
 
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);
 });
+
+// Long-running AI routes (Ollama / resume analysis) can exceed default proxy timeouts.
+// Pair with nginx proxy_read_timeout (see deploy/api-proxy.conf.example).
+const longMs = Number(process.env.SERVER_REQUEST_TIMEOUT_MS) || 900000; // 15 min
+server.timeout = longMs;
+server.keepAliveTimeout = 65000;
+if (typeof server.requestTimeout !== 'undefined') {
+  server.requestTimeout = longMs;
+}
+if (typeof server.headersTimeout !== 'undefined') {
+  server.headersTimeout = longMs + 1000;
+}
